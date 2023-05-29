@@ -1,0 +1,181 @@
+# создайте модель множественной линейной регрессии ночных потоков углекислого газа за период 
+# 2013 года по данным измерений методом турбулентной пульсации
+
+setwd("E:/Zan/zadanie_yaro1/zad2"); getwd()
+
+library(dplyr)
+library(tidyverse)
+library(ellipse)
+library(lubridate)
+library(car) #библиотека для доп регрессион анализа
+library(caret) #библиотека для доп регрессион анализа
+
+# Загрузка данных
+# манипуляция над данными и линейная регрессия 
+#Чтаем данные из файла, пропускаем первую строку, заменяем текстовые 'NA',
+# пустые и сгенерированные пороговые значения на NA, игнорируем строки с "[" 
+eddypro = read_csv("eddypro.csv", skip = 1, na=c("","NA","-9999","-9999.0"),
+                   comment=c("["))
+eddypro = eddypro[-1, ]
+# посмотрим на сами переменные и для этого воспользуеся функцией glimpse(),
+# которая более наглядно представляет каждую отдельную переменную, 
+# жертвуя при этом предсталение строчек данных
+glimpse(eddypro)
+#Удаление первой строки и ненужного пустого столбца "roll"
+eddypro = select(eddypro, -(roll))
+
+#Изменение специальных символов в названии стобцов на допустимые для переменных названия
+names(eddypro) = names(eddypro) %>% 
+  str_replace_all("[!]", "_emph_") %>% 
+  str_replace_all("[?]", "_quest_") %>% 
+  str_replace_all("[*]", "_star_") %>% 
+  str_replace_all("[+]", "_plus_") %>%
+  str_replace_all("[-]", "_minus_") %>%
+  str_replace_all("[@]", "_at_") %>%
+  str_replace_all("[$]", "_dollar_") %>%
+  str_replace_all("[#]", "_hash_") %>%
+  str_replace_all("[/]", "_div_") %>%
+  str_replace_all("[%]", "_perc_") %>%
+  str_replace_all("[&]", "_amp_") %>%
+  str_replace_all("[\\^]", "_power_") %>%
+  str_replace_all("[()]", "_")
+
+# нам необходимо получить данные за 2013 период, ночное время 
+eddypro=filter(eddypro, DOY>1&DOY<365,daytime==FALSE)
+#Преобразуем переменные типа char в факторы
+eddypro = eddypro %>% mutate_if(is.character, as.factor)
+# нам необходимо получить все переменные были типа numeric, 
+# воспользуемся функциями saplly и is.numeric
+eddypro_numeric = eddypro[,sapply(eddypro,is.numeric) ]
+str(eddypro_numeric)
+# посмотрим коэф корреляции 
+cor_eddy=cor(eddypro_numeric)
+str(cor_eddy)
+# необходимо избавиться от na
+# для начала надо посчитать в таблице сколько NA  в каждой переменной
+# воспользуемся функцией summarise_all и sum
+na_cor_eddy=eddypro_numeric %>% summarise_all(~sum(is.na(.x)))
+navect=na_cor_eddy[1,]%>% as.integer()
+
+# посмотрим у каких переменных кол-во NA превышает 30
+names(eddypro_numeric)[navect>30]
+
+# исключим все na
+eddypro_numeric=na.exclude(eddypro_numeric)
+
+# снова посчитаем коэф корреляции
+cor_eddy=cor(eddypro_numeric)
+cor_eddy=data.frame(cor_eddy)
+
+#найдем коэф детерминации для нашей зависимой переменной
+cor_vars=cor_eddy$co2_flux^2
+names(cor_vars)=names(cor_eddy)
+cor_vars
+
+# выбрем только значимые коэффициенты, в которых коэф детерминации более 0,16
+cor_vars=cor_vars[cor_vars>0.16]
+
+# узнаем имена значимых переменных
+names(cor_vars)%>% na.exclude()
+
+
+# МНОЖЕСТВЕННАЯ РЕГРЕССИЯ
+
+#МОДЕЛЬ 1 
+# Построим модель по известным нам значимым переменным 
+mod1 = lm(data = eddypro_numeric, co2_flux ~ rand_err_co2_flux+T_star_+un_co2_flux
+          +w_div_co2_cov)
+# помострим коэффициенты
+coef(mod1)
+#остатки
+resid(mod1)
+# доверительный интервал
+confint(mod1)
+# посмотрим р-значения по модели
+summary(mod1)
+# коэффициент детерминации = 0,9285
+# проведем дисперсионный анализ
+anova(mod1)
+# согласно ДА мы видим какие переменные у нас не значимые: 
+# w_div_co2_cov
+## Построим графиик нормального распределения:
+plot(mod1,2)
+# в целом данные распределены нормально
+# Построим график наблюдаемых значений от предсказанных значений
+plot(mod1$fitted.values, eddypro_numeric$co2_flux)
+# Добавим линию у=х
+abline(a=0, b=1, col="blue")
+# почти все точки лежат на прямой,
+# значит модель хорошо оценивает данные ночных потоков СО2
+# Построим график зависимости остатков от наблюдаемых значений 
+plot(eddypro_numeric$co2_flux,mod1$residuals)
+# Для поиска коэффициентов для линии зададим модель, связывающую остатки и CO2
+mo1=lm(mod1$residuals~eddypro_numeric$co2_flux)
+abline(a=mo1$coefficients[1],b=mo1$coefficients[2],col="blue")
+# наблюдается зависимость остатков от наблюдаемых значений 
+
+#МОДЕЛЬ 2 
+# построим аналогичную модель при этом будем искать зависимость между переменными 
+# второго порядка 
+mod2 = lm(data = eddypro_numeric, co2_flux~ (rand_err_co2_flux+T_star_+un_co2_flux
+                                             +w_div_co2_cov)^2)
+# помострим коэффициенты
+coef(mod2)
+#Остатки
+resid(mod2)
+#Доверительный интервал
+confint(mod2)
+
+#P-значения по модели
+summary(mod2)
+# коэффициент детерминации = 0,9763
+#Дисперсионный анализ
+anova(mod2)
+# согласно ДА мы видим какие переменные 1 и 2-го порядка у нас не значимые: 
+#w_div_co2_cov.
+# однако если в первом порядке эти переменные не значимы, то во 2-м могут быть зависимости 
+#Графиик на нормальной веротяностной бумаге :
+plot(mod2,2) 
+# Построим график наблюдаемых значений от предсказанных значений
+plot(mod2$fitted.values, eddypro_numeric$co2_flux)
+# Добавим линию у=х
+abline(a=0, b=1, col="yellow")
+# Построим график остатков от набоюдаемых значений 
+plot(eddypro_numeric$co2_flux,mod2$residuals)
+# Для поиска коэффициентов для линии зададим модель, связывающую остатки и CO2
+mo2=lm(mod2$residuals~eddypro_numeric$co2_flux)
+
+abline(a=mo2$coefficients[1],b=mo2$coefficients[2],col="yellow")
+
+#МОДЕЛЬ 3 
+# так как незначимые 1 порядка могут иметь связи с перемнными 2-го порядка, мы их не искоючаем
+
+mod3 = lm (data = eddypro_numeric, co2_flux~ (rand_err_co2_flux+T_star_+un_co2_flux
+                                              +w_div_co2_cov)^2-w_div_co2_cov )
+#Коэффициенты
+coef(mod3)
+#Остатки
+resid(mod3)
+#Доверительный интервал
+confint(mod3)
+#P-значения по модели
+summary(mod3)
+# коеффициент детерминации = 0,9731, меньше, чем во 2 модели,
+# таким образом, более полная модель 2 лучше отражает данные
+#Дисперсионный анализ
+anova(mod3)
+#Графиик на нормальной веротяностной бумаге :
+plot(mod3,2) 
+# Построим график наблюдаемых значений от предсказанных значений
+plot(mod3$fitted.values, eddypro_numeric$co2_flux)
+# Добавим линию у=х
+abline(a=0, b=1, col="red")
+# Построим график остатков от набоюдаемых значений 
+plot(eddypro_numeric$co2_flux,mod3$residuals)
+# Для поиска коэффициентов для линии зададим модель, связывающую остатки и CO2
+mo3=lm(mod3$residuals~eddypro_numeric$co2_flux)
+abline(a=mo3$coefficients[1],b=mo3$coefficients[2],col="red")
+# В итоге наилучшим образом  отражает данные 2 модель
+# R^2=0.9762
+# Данные на графике нормального распределенения близки 
+# к нормальному распределению 
